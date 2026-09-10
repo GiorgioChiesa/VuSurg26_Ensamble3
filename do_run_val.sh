@@ -23,9 +23,20 @@
 set -euo pipefail
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+# The weights are not in git (127.7 MB each, above GitHub's per-file limit) and
+# the forward pass runs with --network none, so they must be on disk first.
+# Idempotent: a no-op once they are present.
+echo "=+= Ensuring model weights are present"
+"${SCRIPT_DIR}/fetch_weights.sh"
+
 VIDEO_ID="${1:-5_fps1}"
 VIDEO_DIR="${VIDEO_DIR:-$SCRIPT_DIR/../../data/cat1_gt}"
-DOCKER_IMAGE_TAG="${DOCKER_IMAGE_TAG:-Submission algoritm category 1 final phase}"
+# Must match the tag do_build.sh actually builds. The previous default here
+# was "Submission algoritm category 1 final phase" -- a tag that never
+# existed (typo, spaces, capitals), so every run died with rc=125 unless the
+# caller happened to export DOCKER_IMAGE_TAG themselves.
+DOCKER_IMAGE_TAG="${DOCKER_IMAGE_TAG:-example-algorithm-category-1-final-phase}"
 GPUS="${GPUS:-all}"
 WORK="$SCRIPT_DIR/val_run/$VIDEO_ID"
 

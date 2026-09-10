@@ -59,57 +59,157 @@ everything.
 
 ## Model weights
 
-**The `.pth` files are not in this repository**: each is 127.7 MB, above
-GitHub's 100 MB per-file limit.
+The three checkpoints live on Hugging Face, not in this repository: each is
+127.7 MB, above GitHub's 100 MB per-file limit.
 
-<!-- TODO: replace with the Hugging Face repo URL once it exists -->
-Weights are hosted separately — see the release notes. Place the three
-checkpoints under `model/ensemble/` before building:
+**https://huggingface.co/SGio16/Ensamble3**
 
+You do not need to fetch them by hand. `fetch_weights.sh` downloads them into
+`model/ensemble/`, verifies each against its SHA-256, and does nothing if they
+are already there:
+
+```bash
+./fetch_weights.sh            # download whatever is missing
+./fetch_weights.sh --check    # verify only, download nothing
+./fetch_weights.sh --force    # re-download everything
 ```
-model/ensemble/clevis_sarrarp.pth
-model/ensemble/clevis_mixA.pth
-model/ensemble/clevis_mixC.pth
-```
 
-`inference.py` globs **only** `model/ensemble/`, deliberately: the full model
-package also carries whole-instrument detectors, a different object entirely,
-and a recursive glob would enrol them as ensemble members and flood every frame
-with instrument-sized boxes labelled as clevises.
+`do_test_run.sh` and `do_run_val.sh` call it themselves, so in practice you never
+run it directly. The repository is public and no Hugging Face token is needed.
+
+The download happens **on the host, before any container starts**, and that is
+deliberate: the forward pass runs with `--network none`, because Grand Challenge
+gives the algorithm no internet. Downloading from inside `inference.py` would
+work on your machine and fail on the platform.
+
+`inference.py` globs **only** `model/ensemble/`. That is not laziness: the full
+model package also carries whole-instrument detectors, a different object
+entirely, and a recursive glob would enrol them as ensemble members and flood
+every frame with instrument-sized boxes labelled as clevises.
 
 ## Running it
 
+### Prerequisites
+
+- Docker with the NVIDIA container runtime — the ensemble runs six forward
+  passes per frame and does not finish on CPU
+- One NVIDIA GPU, roughly 6 GB free
+- `curl` and `sha256sum` on the host, for the weight download
+- About 1.5 GB of disk for the image, plus 383 MB for the weights
+
+### 1. Build
+
 ```bash
-./do_build.sh                 # build the image
-./do_test_run.sh              # run on the sample under test/ (needs a real video)
-./do_run_val.sh               # run over a directory of validation videos
-./do_save.sh                  # export the image as a tarball for upload
+./do_build.sh
 ```
 
-The base image is `pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime`. A CPU base is
-not viable: the ensemble runs six forward passes per frame and would time out.
-`torch >= 2.5` is required for a non-obvious reason — `transformers` 5.x silently
-disables its PyTorch integration below that version, and the backbone mixins
-`rfdetr` imports are then never exported, so the container dies on
-`cannot import name 'BackboneConfigMixin'`, which looks like a `transformers`
-version problem and is not.
+Builds `example-algorithm-category-1-final-phase` from
+`pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime`.
 
-### Post-processing configuration
+`torch >= 2.5` is required for a reason two steps removed from its symptom:
+`transformers` 5.x silently disables its PyTorch integration on older torch, and
+with it gone the backbone mixins `rfdetr` imports are never exported. The
+container then dies on `cannot import name 'BackboneConfigMixin'`, which looks
+like a `transformers` version problem and is not.
 
-Three environment variables, applied in this order: score floor, cross-class
-suppression, per-frame cap. The shipped values disable the first two:
+### 2. Smoke test
 
-| Variable | Shipped | Library default |
-|---|---|---|
-| `CLEVIS_MIN_SCORE` | `0` | `0.3` |
-| `CLEVIS_CROSS_CLASS_IOU` | `1.0` (off) | `0.55` |
-| `CLEVIS_MAX_PER_FRAME` | `10` | `3` |
+```bash
+./do_test_run.sh
+```
 
-The sweep's optimum for the cap is `100`, not `10`; shipping `10` cost about
-0.0023 mAP locally. It survived review because on the challenge's own videos the
-cap truncates only 1.4 % of frames — on a held-out video it truncates 28.4 %,
-because a less certain model emits a longer tail. It is the one setting we would
-change.
+Fetches the weights if needed, rebuilds, and runs one forward pass over
+`test/input/interf0/`, writing `test/output/interf0/surgical-tools.json`.
+
+**The sample video is not in this repository** — challenge footage is not
+redistributed here (see *Data and what is not here*). Drop any endoscopic `.mp4` at
+`test/input/interf0/endoscopic-robotic-surgery-video.mp4` before running.
+
+On a shared machine, pin a GPU instead of taking all of them:
+
+```bash
+GPUS='"device=1"' ./do_test_run.sh
+```
+
+### 3. Run on a video and look at the boxes
+
+```bash
+VIDEO_DIR=/path/to/videos ./do_run_val.sh <video_id>
+```
+
+This runs the container over `<video_id>` and renders the predictions on top of
+the footage, writing under `val_run/<video_id>/`:
+
+```
+input/inputs.json          the Grand Challenge interface descriptor
+output/surgical-tools.json the raw submission-format predictions
+output/coco_<id>.json      the same boxes in COCO form, for scoring
+video/<id>_gt_vs_pred.mp4  ground truth against predictions, side by side
+```
+
+**What this is and is not.** The seven challenge videos are *in the training
+set* of these weights, so the boxes are not an accuracy measurement — the model
+has seen them. It is a **geometry check**: are the boxes on the clevis, is the
+class plausible, is the count per frame sane? For an honest number use the
+seven-fold protocol in `algorithms/run_cascade_kfold.sh`.
+
+It earns its place: the first Grand Challenge run returned 99.3 % "needle
+driver" on a 1280x720 test video while the same models classified correctly on
+640x512 footage. Looking at the rendered video is how that was diagnosed.
+
+### 4. Export for upload
+
+```bash
+./do_save.sh
+```
+
+Writes `<tag>_<build-timestamp>.tar.gz` for upload to Grand Challenge, then
+re-reads what it wrote. That verification is not decoration: an earlier version
+lacked `set -o pipefail`, and in `docker save | gzip > file` bash inspects only
+gzip's exit status — a truncated 1.26 GB image was shipped while the script
+printed success.
+
+### Configuring post-processing
+
+Three environment variables, applied in this order — score floor, cross-class
+suppression, per-frame cap — set in the `Dockerfile` so changing them needs no
+rebuild of the model:
+
+| Variable | Shipped | Library default | Effect of the default |
+|---|---|---|---|
+| `CLEVIS_MIN_SCORE` | `0` | `0.3` | drops low-scoring boxes |
+| `CLEVIS_CROSS_CLASS_IOU` | `1.0` (off) | `0.55` | suppresses overlapping boxes of different classes |
+| `CLEVIS_MAX_PER_FRAME` | `10` | `3` | caps detections per frame |
+
+Together the library defaults cost **0.0396 mAP** against emitting everything,
+measured over a 96-point sweep. The sweep's optimum for the cap is `100`, not
+`10`; shipping `10` cost about 0.0023 locally. It survived review because on the
+challenge's own videos the cap truncates just 1.4 % of frames — on a held-out
+video it truncates 28.4 %, because a less certain model emits a longer tail. It
+is the one setting we would change.
+
+### Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `rc=125` from `do_run_val.sh` | image not built, or `DOCKER_IMAGE_TAG` overridden to a tag that does not exist |
+| `cannot import name 'BackboneConfigMixin'` | torch below 2.5; `transformers` disabled its PyTorch integration |
+| `no model checkpoint under /opt/ml/model` | weights absent — run `./fetch_weights.sh` |
+| Every frame full of huge boxes | whole-instrument checkpoints ended up in `model/ensemble/` |
+| Container times out | running on CPU; six forward passes per frame need a GPU |
+| `fetch_weights` reports MISMATCH | a previous download was interrupted; re-run, it re-fetches |
+
+## Data and what is not here
+
+`val_run/` holds the **JSON predictions only**. The rendered overlay videos and
+the challenge input footage are deliberately **not** redistributed here: the
+source videos are governed by the SurgVU data agreement and are available from
+the challenge organisers, who are the right people to get them from.
+
+That is why `do_test_run.sh` needs you to supply a video, and why
+`do_run_val.sh` takes a `VIDEO_DIR`. The predictions are published so that the
+container's output can be inspected and re-scored without the footage; the
+footage itself is not ours to hand out.
 
 ## Layout
 
@@ -118,16 +218,12 @@ Dockerfile          container definition, including the post-processing env vars
 inference.py        the whole inference path: fusion, TTA, filtering, output
 requirements.txt    pinned runtime dependencies
 do_*.sh             build / test / validate / export
+fetch_weights.sh    downloads the checkpoints from Hugging Face, checksum-verified
 model/README.md     model card: what shipped, how it was trained, provenance
 algorithms/         training, evaluation and dataset-preparation code
 val_run/            prediction outputs on the seven released videos (evidence)
 test/               sample input/output pair for a smoke run
 ```
-
-`val_run/` holds the JSON predictions only. The rendered overlay videos and the
-challenge input footage are deliberately **not** redistributed here: the source
-videos are governed by the SurgVU data agreement and are available from the
-challenge organisers.
 
 ## Citation
 

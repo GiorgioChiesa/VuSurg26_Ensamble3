@@ -9,6 +9,12 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 # below is derived from it. The old script set its own tag here ("Submission
 # algoritm category 1 final phase") and then sourced do_build.sh, which silently
 # replaced it -- so the declared tag was never the one used.
+# The weights are not in git (127.7 MB each, above GitHub's per-file limit) and
+# the forward pass runs with --network none, so they must be on disk first.
+# Idempotent: a no-op once they are present.
+echo "=+= Ensuring model weights are present"
+"${SCRIPT_DIR}/fetch_weights.sh"
+
 echo "=+= (Re)build the container"
 source "${SCRIPT_DIR}/do_build.sh"
 
