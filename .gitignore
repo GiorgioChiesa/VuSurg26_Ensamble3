@@ -1,0 +1,17 @@
+# Model weights live outside git: each checkpoint is 127.7 MB, above GitHub's
+# 100 MB per-file limit. See README.md.
+*.pth
+*.ckpt
+
+# Build output: rebuildable with do_save.sh, and hundreds of MB each.
+*.tar
+*.tar.gz
+*.gz
+*.zip
+
+# Challenge footage and renders derived from it are not redistributed here:
+# the source videos are governed by the SurgVU data agreement.
+*.mp4
+
+__pycache__/
+*.pyc

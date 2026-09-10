@@ -1,0 +1,137 @@
+# ============================================================================
+# cat1_cascade.yaml — the CASCADE branch: whole instrument + class, then clevis
+#
+# WHY THIS FILE IS SEPARATE
+#   configs/hpc_pair.yaml is not stable: jobs/run_auto_labeling.sh copies it to
+#   <config>.backup on start and restores that copy on exit, and several of those
+#   loops run at once. Anything added there disappears on the next restore. This
+#   config is owned by the cascade experiment alone and nothing rewrites it.
+#
+# WHAT THIS BRANCH IS
+#   Measured on the cat1 GT (runs/clevis_patch/00_ceiling/report.json), an oracle
+#   clevis box with an ORACLE class scores 0.984 mAP; the same box with the REAL
+#   crop classifier scores 0.349. Classification, not clevis geometry, is the
+#   binding constraint. This branch moves classification into the detector: one
+#   RF-DETR predicts the whole instrument AND its type, and a second decoder
+#   (stage 2, not configured here yet) narrows the box to the clevis.
+#
+#   The incumbent to beat is the 3-stage patch cascade at 0.194 +/- 0.079 mAP
+#   over the 7-fold leave-2-out partition (runs/patch_localizer/cat1_kfold_eval).
+# ============================================================================
+
+io:
+  data_dir: data/surgvu
+  cache_dir: data/cache_cascade
+  # the OCR-derived weak labels, not the official SurgVU ones: the roster that
+  # built this corpus was derived from them and the two disagree on 375 samples.
+  labels_dir: data/surgvu_ocr_labels
+
+# ── stage 1: whole-instrument detector with 14 instrument-type classes ───────
+rfdetr_wrist:
+  train:
+    # Produced by:
+    #   jobs/export_review.py --title "Auto labeling"
+    #   clevis-labelstudio-apply --incomplete-policy reviewed-or-confident
+    #                            --min-detection-confidence 0.87
+    #   scripts/correct_labels_from_ocr_roster.py
+    # 11,062 frames / 23,233 boxes / 14 classes, 226 SurgVU videos.
+    data: exports/cascade/auto_labeling-087-ocr/dataset.yaml
+
+    # MEDIUM, not small. The clevis is ~1.4% of a 640x512 frame and resolution is
+    # the axis the patch branch already proved pays. Medium runs at 576.
+    #
+    # NOTE ON WARM START: runs/rfdetr_full/rfdetr_small_full_new/last.ckpt cannot
+    # seed this run. It is an RFDETRSmall (dec_layers 3, resolution 512,
+    # num_classes 1); Medium is dec_layers 4 at 576. The architectures do not
+    # match, so pretrain_weights stays null and RF-DETR downloads its own COCO
+    # checkpoint (medium_coco/checkpoint_best_regular.pth, 386 MB). The class
+    # head is built fresh at 14+1 either way: _resize_linear grows a head by
+    # TILING rows, so seeding 14 classes from a 1-class head would just clone the
+    # same "is an instrument" logit fourteen times.
+    model: rfdetr-medium
+    pretrain_weights: null
+
+    output_dir: runs/rfdetr_cascade/stage1_14class
+    dataset_file: yolo
+    dataset_dir: null
+
+    epochs: 40
+    batch_size: 16
+    grad_accum_steps: 1
+    lr: null
+    lr_encoder: null
+    weight_decay: null
+    resolution: null      # Medium's own default (576); must divide patch*windows
+    device: null
+    seed: 42
+    resume: null
+
+    gradient_checkpointing: false
+    early_stopping: false
+    early_stopping_patience: 10
+    checkpoint_interval: 10
+    # every 5 epochs, not every 10: this run's whole point is watching the CLASS
+    # metrics move, and per-class AP only lands on an eval epoch.
+    eval_interval: 5
+    # MUST stay null. The rfdetr INSTALLED in the runtime image is older than
+    # submodules/rf-detr and its TrainConfig has no `check_val_every_n_epoch`;
+    # TrainConfig is extra="forbid", so any value here aborts the run during
+    # config validation. eval_interval already sets the cadence.
+    # (configs/default.yaml and configs/hpc_pair.yaml both set it to 10 and would
+    # fail the same way against this image.)
+    check_val_every_n_epoch: null
+
+    workers: 8
+    # MUST stay cpu. The kornia/GPU augmentation path re-collates only
+    # boxes/masks, so any extra per-instance geometry is silently dropped — which
+    # is what stage 2 will add.
+    augmentation_backend: cpu
+    pin_memory: true
+    persistent_workers: null
+    prefetch_factor: 4
+
+    # no WANDB_API_KEY is bound into these jobs; leaving wandb true makes the run
+    # spend its first minutes failing to authenticate.
+    tensorboard: false
+    wandb: false
+    wandb_project: clevis-rfdetr-cascade
+    wandb_name: null
+
+    strict_dataset: false
+
+# ── evaluation against the real cat1 ground truth ───────────────────────────
+# Reused verbatim from configs/cat1_patch.yaml. The classifier taxonomy and the
+# cat1 category names are NOT string-identical: the classifier says "monopolar
+# curved scissors" and cat1 category 7 is "monopolar curved scissor" — 25% of all
+# GT boxes hang on that trailing "s". A null value means the class has no cat1
+# counterpart and its detections are counted as unmapped rather than folded into
+# a neighbour.
+clevis_eval:
+  gt_dir: data/cat1_gt
+  cache_dir: data/cache_cat1_gt
+  output_root: runs/cat1_cascade
+  video_ids: []
+  pred_width: 640
+  pred_height: 512
+  eval_scope: ground-truth
+  class_aware: true
+  per_class: true
+  render_videos: false
+  gt_color_bgr: [0, 255, 0]
+  pred_color_bgr: [255, 0, 0]
+  category_map:
+    grasping retractor: {id: 0, name: grasping retractor}
+    cadiere forceps: {id: 1, name: cadiere forceps}
+    bipolar forceps: {id: 2, name: bipolar forceps}
+    force bipolar: {id: 3, name: force bipolar}
+    clip applier: {id: 4, name: clip applier}
+    stapler: {id: 5, name: stapler}
+    permanent cautery hook/spatula: {id: 6, name: permanent cautery hook spatula}
+    monopolar curved scissors: {id: 7, name: monopolar curved scissor}
+    vessel sealer: {id: 8, name: vessel sealer}
+    tip-up fenestrated grasper: {id: 9, name: tip up fenestrated grasper}
+    bipolar dissector: {id: 10, name: bipolar dissector}
+    needle driver: {id: 11, name: needle driver}
+    prograsp forceps: {id: 12, name: prograsp forceps}
+    suction irrigator: {id: 13, name: suction irrigator}
+    synchroseal: null

@@ -1,0 +1,16 @@
+# Pinned because the runtime has --network none: whatever is not installed at
+# build time is not available at inference time.
+#
+# rfdetr pulls torch, torchvision, supervision and transformers itself. The
+# checkpoints shipped here are plain RFDETRMedium DETECTION models (no
+# segmentation head, no persistent-query tracking), so upstream rfdetr loads
+# them; the fork in submodules/rf-detr is only needed for training.
+rfdetr==1.8.3
+# MUST be v5: rfdetr's windowed-DINOv2 backbone imports BackboneConfigMixin /
+# BackboneMixin from transformers, which only exist there. Without this pin pip
+# resolves an older transformers and the container dies on import with
+# "cannot import name 'BackboneConfigMixin'". The repo's own pyproject records
+# the same constraint for its  extra.
+transformers>=5.1
+opencv-python-headless==4.10.0.84
+numpy<2

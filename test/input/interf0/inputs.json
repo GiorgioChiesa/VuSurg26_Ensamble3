@@ -1,0 +1,14 @@
+[
+    {
+        "file": "https://grand-challenge.org/media/some-link/endoscopic-robotic-surgery-video.mp4",
+        "image": null,
+        "value": null,
+        "interface": {
+            "slug": "endoscopic-robotic-surgery-video",
+            "kind": "MP4 file",
+            "super_kind": "File",
+            "relative_path": "endoscopic-robotic-surgery-video.mp4",
+            "example_value": null
+        }
+    }
+]
