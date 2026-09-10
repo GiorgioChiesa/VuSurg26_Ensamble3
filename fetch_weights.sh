@@ -44,6 +44,11 @@ done
 command -v curl >/dev/null || { echo "fetch_weights: curl is required" >&2; exit 2; }
 mkdir -p "$DEST"
 
+# A progress bar is worth having for 383 MB, but it is written with carriage
+# returns: useful on a terminal, thousands of lines of noise in a captured log
+# or a CI job. Show it only when someone is actually watching.
+if [[ -t 2 ]]; then PROGRESS=(--progress-bar); else PROGRESS=(--silent --show-error); fi
+
 ok=0; fetched=0; failed=0
 for entry in "${FILES[@]}"; do
     read -r name want <<<"$entry"
@@ -74,7 +79,7 @@ for entry in "${FILES[@]}"; do
     # Download beside the target, not onto it: an interrupted transfer must not
     # leave a half file where a later run would find it and trust its presence.
     # -L: the resolve endpoint redirects to a CDN.
-    if ! curl -fL --retry 3 --retry-delay 2 --progress-bar \
+    if ! curl -fL --retry 3 --retry-delay 2 "${PROGRESS[@]}" \
               -o "$path.part" "$BASE/$name"; then
         echo "  FAILED   $name (download)" >&2
         rm -f "$path.part"; failed=$((failed + 1)); continue
