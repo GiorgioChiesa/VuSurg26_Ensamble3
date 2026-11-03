@@ -3,7 +3,7 @@
 Inference container submitted to **MICCAI SurgVU 2026, Category 1** (clevis
 detection and instrument classification in robot-assisted surgical video).
 
-This entry placed **6th among the competing teams** on the final-phase test set,
+This entry placed **3th among the competing teams** on the final-phase test set,
 scoring **0.5385 mAP**; the leading entry scored 0.5720.
 
 ## What it does
